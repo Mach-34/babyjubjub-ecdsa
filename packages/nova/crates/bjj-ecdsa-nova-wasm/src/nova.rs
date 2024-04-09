@@ -1,17 +1,24 @@
 use crate::{console_log, init_panic_hook, input::Membership, Fq, Fr, NovaProof, Params, G1, G2};
 use ff::PrimeField;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
-use js_sys::{Array, Number, Uint8Array};
+use js_sys::{Array, Boolean, Number, Uint8Array};
 use nova_scotia::{
     circom::reader::load_r1cs, continue_recursive_circuit, create_recursive_circuit, FileLocation,
+    C1, C2, S,
 };
-use num::{Num, BigInt};
+use nova_snark::{CompressedSNARK, ProverKey, VerifierKey};
+use num::{iter, BigInt, Num};
 use std::io::{Read, Write};
 use wasm_bindgen::prelude::*;
 
 /** Verify a proof */
 #[wasm_bindgen]
-pub async fn verify_proof(params_string: String, proof_string: String, root: String, num_steps: Number) -> Array {
+pub async fn verify_proof(
+    params_string: String,
+    proof_string: String,
+    root: String,
+    num_steps: Number,
+) -> Array {
     init_panic_hook();
     console_log!("NovaWasm: Verifying proof...");
     // deserialize pp file
@@ -37,7 +44,9 @@ pub async fn verify_proof(params_string: String, proof_string: String, root: Str
     let z0_secondary = vec![Fq::from(0)];
     // verify proof
     let res = proof
-        .verify(&params, num_steps, &z0_primary, &z0_secondary).unwrap().0;
+        .verify(&params, num_steps, &z0_primary, &z0_secondary)
+        .unwrap()
+        .0;
     // marshall results into js values
     let arr = Array::new_with_length(2);
     for (index, item) in res.into_iter().enumerate() {
@@ -204,7 +213,7 @@ pub async fn obfuscate_proof(
 
     // get a random private input to chaff the proof
     let private_inputs = vec![Membership::chaff()];
-    
+
     // deserialize the previous fold to build from
     let mut proof: NovaProof = serde_json::from_str(&proof_string).unwrap();
 
@@ -245,6 +254,73 @@ pub async fn obfuscate_proof(
     return serde_json::to_string(&proof.clone()).unwrap();
 }
 
+#[wasm_bindgen]
+pub async fn prove_spartan(
+    params_string: String,
+    pk_string: String,
+    proof_string: String,
+) -> String {
+    init_panic_hook();
+    console_log!("NovaWasm: Proving fold in Spartan");
+    // deserialize the params
+    let params: Params = serde_json::from_str(&params_string).unwrap();
+    // deserialize the prover key
+    let pk: ProverKey<G1, G2, C1<G1>, C2<G2>, S<G1>, S<G2>> =
+        serde_json::from_str(&pk_string).unwrap();
+    // deserialize the proof
+    let proof: NovaProof = serde_json::from_str(&proof_string).unwrap();
+
+    // compress to spartan
+    let spartan_proof =
+        CompressedSNARK::<_, _, _, _, S<G1>, S<G2>>::prove(&params, &pk, &proof).unwrap();
+
+    // return the spartan compressed zkp
+    console_log!("NovaWasm: Successfully proved spartan!");
+    serde_json::to_string(&spartan_proof).unwrap()
+}
+
+#[wasm_bindgen]
+pub async fn verify_spartan(
+    vk_string: String,
+    proof_string: String,
+    num_folds: Number,
+    root_bigint: String,
+) -> Boolean {
+    // deserialize the verifier key
+    let vk: VerifierKey<G1, G2, C1<G1>, C2<G2>, S<G1>, S<G2>> =
+        serde_json::from_str(&vk_string).unwrap();
+    // deserialize the proof
+    let proof: CompressedSNARK<G1, G2, C1<G1>, C2<G2>, S<G1>, S<G2>> =
+        serde_json::from_str(&proof_string).unwrap();
+    // parse the root
+    let mut root_bytes = BigInt::from_str_radix(&root_bigint, 10)
+        .unwrap()
+        .to_bytes_le()
+        .1;
+    if root_bytes.len() < 32 {
+        let mut padded = vec![0; 32 - root_bytes.len()];
+        root_bytes.append(&mut padded);
+    }
+    let bytes: [u8; 32] = root_bytes.try_into().unwrap();
+
+    // get z0 primary and secondary
+    let root = Fr::from_repr(bytes).unwrap();
+    let z0_primary = vec![root, Fr::from(0)];
+    let z0_secondary = vec![Fq::from(0)];
+
+    // verify the proof
+    let iterations = num_folds.as_f64().unwrap() as usize;
+    match proof.verify(&vk, iterations, z0_primary, z0_secondary) {
+        Ok(_) => {
+            console_log!("NovaWasm: Successfully verified spartan proof!");
+            Boolean::from(true)
+        }
+        Err(_) => {
+            console_log!("NovaWasm: Failed to verify spartan proof!");
+            Boolean::from(false)
+        }
+    }
+}
 /**
  * Gzip compress a proof
  *

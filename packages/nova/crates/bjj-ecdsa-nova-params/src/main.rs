@@ -197,13 +197,13 @@ pub fn chunk_keys(path: &String) {
 
     // save chunks
     for (i, chunk) in pk_chunks.iter().enumerate() {
-        let chunk_path = pk_output_folder.join(format!("pk_{}.json", i));
+        let chunk_path = pk_output_folder.join(format!("pk_{}.gz", i));
         let mut file = std::fs::File::create(&chunk_path).expect("Unable to create file");
         file.write_all(chunk).expect("Unable to write data");
     };
 
     for (i, chunk) in vk_chunks.iter().enumerate() {
-        let chunk_path = vk_output_folder.join(format!("vk_{}.json", i));
+        let chunk_path = vk_output_folder.join(format!("vk_{}.gz", i));
         let mut file = std::fs::File::create(&chunk_path).expect("Unable to create file");
         file.write_all(chunk).expect("Unable to write data");
     };
